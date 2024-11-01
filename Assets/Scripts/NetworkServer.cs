@@ -252,8 +252,8 @@ public class NetworkServer : MonoBehaviour
         }
         else
         {
-            Debug.Log($"Room creation failed: Room {roomName} already exists. Joining {roomName}.");
-            HandleJoinRoom(roomName, connection);
+            SendMessageToClient("RoomAlreadyExists:" + roomName, connection);
+            Debug.Log($"Room {roomName} already exists.");
         }
     }
 
