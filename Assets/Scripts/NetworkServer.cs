@@ -1,5 +1,5 @@
+
 using UnityEngine;
-using UnityEngine.Assertions;
 using Unity.Collections;
 using Unity.Networking.Transport;
 using System.Text;
@@ -14,10 +14,10 @@ public class NetworkServer : MonoBehaviour
     NetworkPipeline nonReliableNotInOrderedPipeline;
 
     const ushort NetworkPort = 9001;
-
     const int MaxNumberOfClientConnections = 1000;
 
     private Dictionary<NetworkConnection, string> connectedUsers = new Dictionary<NetworkConnection, string>();
+    private Dictionary<string, List<NetworkConnection>> gameRooms = new Dictionary<string, List<NetworkConnection>>();
 
     [System.Serializable]
     public class User
@@ -33,7 +33,6 @@ public class NetworkServer : MonoBehaviour
     }
 
     private List<User> registeredUsers = new List<User>();
-
 
     void Start()
     {
@@ -130,7 +129,6 @@ public class NetworkServer : MonoBehaviour
                         break;
                 }
             }
-
         }
 
         #endregion
@@ -163,14 +161,12 @@ public class NetworkServer : MonoBehaviour
         {
             SendMessageToClient("LoginSuccess", connection);
             connectedUsers[connection] = username;
-
-            int connectionIndex = networkConnections.IndexOf(connection);
-            Debug.Log($"User connected: {username}, Connection Index: {connectionIndex}");
-
+            Debug.Log($"User {username} logged in successfully.");
         }
         else
         {
             SendMessageToClient("LoginFailed: Invalid username or password.", connection);
+            Debug.Log($"Login failed for user {username}.");
         }
     }
 
@@ -179,6 +175,7 @@ public class NetworkServer : MonoBehaviour
         if (PlayerPrefs.HasKey(username))
         {
             SendMessageToClient("AccountCreationFailed: Username already exists.", connection);
+            Debug.Log($"Account creation failed for {username}: Username already exists.");
         }
         else
         {
@@ -186,10 +183,7 @@ public class NetworkServer : MonoBehaviour
             PlayerPrefs.Save();
             SendMessageToClient("AccountCreated", connection);
             connectedUsers[connection] = username;
-
-            int connectionIndex = networkConnections.IndexOf(connection);
-            Debug.Log($"User created account: {username}, Connection Index: {connectionIndex}");
-
+            Debug.Log($"Account created for user {username}.");
         }
     }
 
@@ -217,8 +211,74 @@ public class NetworkServer : MonoBehaviour
                 HandleCreateAccount(username, password, connection);
             }
         }
+        else if (msg.StartsWith("CreateRoom:"))
+        {
+            string roomName = msg.Split(':')[1];
+            HandleCreateRoom(roomName, connection);
+        }
+        else if (msg.StartsWith("JoinRoom:"))
+        {
+            string roomName = msg.Split(':')[1];
+            HandleJoinRoom(roomName, connection);
+        }
+        else if (msg.StartsWith("CheckRoom:"))
+        {
+            string roomName = msg.Split(':')[1];
+            HandleCheckRoom(roomName, connection);
+        }
     }
 
+    private void HandleCheckRoom(string roomName, NetworkConnection connection)
+    {
+        if (gameRooms.ContainsKey(roomName))
+        {
+            SendMessageToClient("RoomExists:" + roomName, connection);
+            Debug.Log($"Room {roomName} exists. Notifying client.");
+        }
+        else
+        {
+            SendMessageToClient("RoomDoesNotExist:" + roomName, connection);
+            Debug.Log($"Room {roomName} does not exist. Notifying client.");
+        }
+    }
+
+    private void HandleCreateRoom(string roomName, NetworkConnection connection)
+    {
+        if (!gameRooms.ContainsKey(roomName))
+        {
+            gameRooms[roomName] = new List<NetworkConnection> { connection };
+            SendMessageToClient("RoomCreated:" + roomName, connection);
+            Debug.Log($"Player {connectedUsers[connection]} created room: {roomName}");
+        }
+        else
+        {
+            Debug.Log($"Room creation failed: Room {roomName} already exists. Joining {roomName}.");
+            HandleJoinRoom(roomName, connection);
+        }
+    }
+
+    private void HandleJoinRoom(string roomName, NetworkConnection connection)
+    {
+        if (gameRooms.ContainsKey(roomName))
+        {
+            gameRooms[roomName].Add(connection);
+            SendMessageToClient("JoinedRoom:" + roomName, connection);
+            Debug.Log($"Player {connectedUsers[connection]} joined room: {roomName}");
+
+            foreach (var conn in gameRooms[roomName])
+            {
+                if (conn != connection)
+                {
+                    SendMessageToClient("PlayerJoined:" + connectedUsers[connection], conn);
+                }
+            }
+        }
+        else
+        {
+            SendMessageToClient("RoomDoesNotExist:" + roomName, connection);
+            Debug.Log($"Join room failed: Room {roomName} does not exist.");
+        }
+    }
 
     public void SendMessageToClient(string msg, NetworkConnection networkConnection)
     {
@@ -233,5 +293,4 @@ public class NetworkServer : MonoBehaviour
 
         buffer.Dispose();
     }
-
 }
