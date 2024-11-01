@@ -3,6 +3,7 @@ using UnityEngine.Assertions;
 using Unity.Collections;
 using Unity.Networking.Transport;
 using System.Text;
+using System.Collections.Generic;
 
 public class NetworkServer : MonoBehaviour
 {
@@ -15,6 +16,24 @@ public class NetworkServer : MonoBehaviour
     const ushort NetworkPort = 9001;
 
     const int MaxNumberOfClientConnections = 1000;
+
+    private Dictionary<NetworkConnection, string> connectedUsers = new Dictionary<NetworkConnection, string>();
+
+    [System.Serializable]
+    public class User
+    {
+        public string username;
+        public string password;
+
+        public User(string username, string password)
+        {
+            this.username = username;
+            this.password = password;
+        }
+    }
+
+    private List<User> registeredUsers = new List<User>();
+
 
     void Start()
     {
@@ -90,11 +109,6 @@ public class NetworkServer : MonoBehaviour
 
             while (PopNetworkEventAndCheckForData(networkConnections[i], out networkEventType, out streamReader, out pipelineUsedToSendEvent))
             {
-                if (pipelineUsedToSendEvent == reliableAndInOrderPipeline)
-                    Debug.Log("Network event from: reliableAndInOrderPipeline");
-                else if (pipelineUsedToSendEvent == nonReliableNotInOrderedPipeline)
-                    Debug.Log("Network event from: nonReliableNotInOrderedPipeline");
-
                 switch (networkEventType)
                 {
                     case NetworkEvent.Type.Data:
@@ -103,15 +117,20 @@ public class NetworkServer : MonoBehaviour
                         streamReader.ReadBytes(buffer);
                         byte[] byteBuffer = buffer.ToArray();
                         string msg = Encoding.Unicode.GetString(byteBuffer);
-                        ProcessReceivedMsg(msg);
+                        ProcessReceivedMsg(msg, networkConnections[i]);
                         buffer.Dispose();
                         break;
                     case NetworkEvent.Type.Disconnect:
                         Debug.Log("Client has disconnected from server");
+                        if (connectedUsers.ContainsKey(networkConnections[i]))
+                        {
+                            connectedUsers.Remove(networkConnections[i]);
+                        }
                         networkConnections[i] = default(NetworkConnection);
                         break;
                 }
             }
+
         }
 
         #endregion
@@ -136,20 +155,77 @@ public class NetworkServer : MonoBehaviour
         return true;
     }
 
-    private void ProcessReceivedMsg(string msg)
+    private void HandleLogin(string username, string password, NetworkConnection connection)
+    {
+        string storedPassword = PlayerPrefs.GetString(username, null);
+
+        if (storedPassword != null && storedPassword == password)
+        {
+            SendMessageToClient("LoginSuccess", connection);
+            connectedUsers[connection] = username;
+
+            int connectionIndex = networkConnections.IndexOf(connection);
+            Debug.Log($"User connected: {username}, Connection Index: {connectionIndex}");
+
+        }
+        else
+        {
+            SendMessageToClient("LoginFailed: Invalid username or password.", connection);
+        }
+    }
+
+    private void HandleCreateAccount(string username, string password, NetworkConnection connection)
+    {
+        if (PlayerPrefs.HasKey(username))
+        {
+            SendMessageToClient("AccountCreationFailed: Username already exists.", connection);
+        }
+        else
+        {
+            PlayerPrefs.SetString(username, password);
+            PlayerPrefs.Save();
+            SendMessageToClient("AccountCreated", connection);
+            connectedUsers[connection] = username;
+
+            int connectionIndex = networkConnections.IndexOf(connection);
+            Debug.Log($"User created account: {username}, Connection Index: {connectionIndex}");
+
+        }
+    }
+
+    private void ProcessReceivedMsg(string msg, NetworkConnection connection)
     {
         Debug.Log("Msg received = " + msg);
+
+        if (msg.StartsWith("Login:"))
+        {
+            string[] parts = msg.Split(':');
+            if (parts.Length == 3)
+            {
+                string username = parts[1];
+                string password = parts[2];
+                HandleLogin(username, password, connection);
+            }
+        }
+        else if (msg.StartsWith("CreateAccount:"))
+        {
+            string[] parts = msg.Split(':');
+            if (parts.Length == 3)
+            {
+                string username = parts[1];
+                string password = parts[2];
+                HandleCreateAccount(username, password, connection);
+            }
+        }
     }
+
 
     public void SendMessageToClient(string msg, NetworkConnection networkConnection)
     {
         byte[] msgAsByteArray = Encoding.Unicode.GetBytes(msg);
         NativeArray<byte> buffer = new NativeArray<byte>(msgAsByteArray, Allocator.Persistent);
-
-
-        //Driver.BeginSend(m_Connection, out var writer);
         DataStreamWriter streamWriter;
-        //networkConnection.
+
         networkDriver.BeginSend(reliableAndInOrderPipeline, networkConnection, out streamWriter);
         streamWriter.WriteInt(buffer.Length);
         streamWriter.WriteBytes(buffer);
