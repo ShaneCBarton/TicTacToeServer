@@ -225,6 +225,15 @@ public class NetworkServer : MonoBehaviour
         {
             string roomName = msg.Split(':')[1];
             HandleCheckRoom(roomName, connection);
+        } else if (msg.StartsWith("LeaveRoom:"))
+        {
+            string roomName = msg.Split(':')[1];
+            HandleLeaveRoom(roomName, connection);
+        }
+        else if (msg.StartsWith("PlayerMessage:"))
+        {
+            string message = msg.Split(':')[1];
+            HandlePlayerMessage(message, connection);
         }
     }
 
@@ -265,11 +274,11 @@ public class NetworkServer : MonoBehaviour
             SendMessageToClient("JoinedRoom:" + roomName, connection);
             Debug.Log($"Player {connectedUsers[connection]} joined room: {roomName}");
 
-            foreach (var conn in gameRooms[roomName])
+            if (gameRooms[roomName].Count == 2)
             {
-                if (conn != connection)
+                foreach (var conn in gameRooms[roomName])
                 {
-                    SendMessageToClient("PlayerJoined:" + connectedUsers[connection], conn);
+                    SendMessageToClient("GameStarted:" + roomName, conn);
                 }
             }
         }
@@ -278,6 +287,54 @@ public class NetworkServer : MonoBehaviour
             SendMessageToClient("RoomDoesNotExist:" + roomName, connection);
             Debug.Log($"Join room failed: Room {roomName} does not exist.");
         }
+    }
+
+    private void HandleLeaveRoom(string roomName, NetworkConnection connection)
+    {
+        if (gameRooms.ContainsKey(roomName))
+        {
+            var connections = gameRooms[roomName];
+            if (connections.Contains(connection))
+            {
+                connections.Remove(connection);
+                SendMessageToClient("PlayerLeft:" + connectedUsers[connection], connection);
+                Debug.Log($"Player {connectedUsers[connection]} has left room: {roomName}");
+
+                if (connections.Count == 0)
+                {
+                    gameRooms.Remove(roomName);
+                    Debug.Log($"Room {roomName} has been removed as it is empty.");
+                }
+            }
+        }
+    }
+
+    private void HandlePlayerMessage(string message, NetworkConnection senderConnection)
+    {
+        string roomName = FindPlayerRoom(senderConnection);
+        if (roomName != null)
+        {
+            var connections = gameRooms[roomName];
+            foreach (var connection in connections)
+            {
+                if (connection != senderConnection)
+                {
+                    SendMessageToClient($"OpponentMessage:{message}", connection);
+                }
+            }
+        }
+    }
+
+    private string FindPlayerRoom(NetworkConnection playerConnection)
+    {
+        foreach (var room in gameRooms)
+        {
+            if (room.Value.Contains(playerConnection))
+            {
+                return room.Key;
+            }
+        }
+        return null;
     }
 
     public void SendMessageToClient(string msg, NetworkConnection networkConnection)
