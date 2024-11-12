@@ -4,6 +4,7 @@ using Unity.Collections;
 using Unity.Networking.Transport;
 using System.Text;
 using System.Collections.Generic;
+using System.Linq;
 
 public class NetworkServer : MonoBehaviour
 {
@@ -18,6 +19,7 @@ public class NetworkServer : MonoBehaviour
 
     private Dictionary<NetworkConnection, string> connectedUsers = new Dictionary<NetworkConnection, string>();
     private Dictionary<string, List<NetworkConnection>> gameRooms = new Dictionary<string, List<NetworkConnection>>();
+    private Dictionary<string, TicTacToe> gameRoomsState = new Dictionary<string, TicTacToe>();
 
     [System.Serializable]
     public class User
@@ -235,6 +237,16 @@ public class NetworkServer : MonoBehaviour
             string message = msg.Split(':')[1];
             HandlePlayerMessage(message, connection);
         }
+        else if (msg.StartsWith("PlayerMove:"))
+        {
+            string[] parts = msg.Split(':');
+            if (parts.Length == 3)
+            {
+                string roomName = parts[1];
+                int position = int.Parse(parts[2]);
+                HandlePlayerMove(roomName, position, connection);
+            }
+        }
     }
 
     private void HandleCheckRoom(string roomName, NetworkConnection connection)
@@ -276,10 +288,19 @@ public class NetworkServer : MonoBehaviour
 
             if (gameRooms[roomName].Count == 2)
             {
-                foreach (var conn in gameRooms[roomName])
-                {
-                    SendMessageToClient("GameStarted:" + roomName, conn);
-                }
+                gameRoomsState[roomName] = new TicTacToe();
+
+                var connections = gameRooms[roomName];
+                string player1Name = connectedUsers[connections[0]];
+                string player2Name = connectedUsers[connections[1]];
+
+                connectedUsers[connections[0]] = "Player1";
+                connectedUsers[connections[1]] = "Player2";
+
+                SendMessageToClient($"GameStarted:{roomName}:true", connections[0]);
+                SendMessageToClient($"GameStarted:{roomName}:false", connections[1]);
+
+                UpdateClientsWithBoardState(roomName, gameRoomsState[roomName], player1Name, player2Name);
             }
         }
         else
@@ -289,6 +310,7 @@ public class NetworkServer : MonoBehaviour
         }
     }
 
+
     private void HandleLeaveRoom(string roomName, NetworkConnection connection)
     {
         if (gameRooms.ContainsKey(roomName))
@@ -297,12 +319,21 @@ public class NetworkServer : MonoBehaviour
             if (connections.Contains(connection))
             {
                 connections.Remove(connection);
-                SendMessageToClient("PlayerLeft:" + connectedUsers[connection], connection);
+
+                foreach (var conn in connections)
+                {
+                    SendMessageToClient("PlayerLeft:" + connectedUsers[connection], conn);
+                }
+
                 Debug.Log($"Player {connectedUsers[connection]} has left room: {roomName}");
 
                 if (connections.Count == 0)
                 {
                     gameRooms.Remove(roomName);
+                    if (gameRoomsState.ContainsKey(roomName))
+                    {
+                        gameRoomsState.Remove(roomName);
+                    }
                     Debug.Log($"Room {roomName} has been removed as it is empty.");
                 }
             }
@@ -335,6 +366,81 @@ public class NetworkServer : MonoBehaviour
             }
         }
         return null;
+    }
+
+    private void HandlePlayerMove(string roomName, int position, NetworkConnection connection)
+    {
+        if (!gameRooms.ContainsKey(roomName) || !gameRoomsState.ContainsKey(roomName))
+        {
+            SendMessageToClient("Error: Game not initialized", connection);
+            return;
+        }
+
+        var game = gameRoomsState[roomName];
+        var connections = gameRooms[roomName];
+
+        string player1Name = connectedUsers[connections[0]];
+        string player2Name = connectedUsers[connections[1]];
+
+        if ((game.GetCurrentPlayer() == TicTacToe.Player.X && connectedUsers[connection] == "Player1") ||
+            (game.GetCurrentPlayer() == TicTacToe.Player.O && connectedUsers[connection] == "Player2"))
+        {
+            if (game.MakeMove(position))
+            {
+                UpdateClientsWithBoardState(roomName, game, player1Name, player2Name);
+
+                NetworkConnection currentPlayer = connection;
+                NetworkConnection otherPlayer = connections.Find(c => c != connection);
+
+                SendMessageToClient("OpponentTurn", currentPlayer);
+                SendMessageToClient("YourTurn", otherPlayer);
+
+                var winner = game.GetWinner();
+                if (winner != TicTacToe.Player.None)
+                {
+                    EndGame(roomName, winner, player1Name, player2Name);
+                }
+                else if (game.IsBoardFull())
+                {
+                    EndGame(roomName, TicTacToe.Player.None, player1Name, player2Name);
+                }
+            }
+            else
+            {
+                SendMessageToClient("Invalid move. Try again.", connection);
+            }
+        }
+        else
+        {
+            SendMessageToClient("It's not your turn!", connection);
+        }
+    }
+
+    private void UpdateClientsWithBoardState(string roomName, TicTacToe game, string player1Name, string player2Name)
+    {
+        if (!gameRooms.ContainsKey(roomName)) return;
+
+        var boardState = game.GetBoardState();
+        var message = $"BoardState:{string.Join(",", boardState.Select(p => p.ToString()))}:{player1Name}:{player2Name}";
+
+        foreach (var conn in gameRooms[roomName])
+        {
+            SendMessageToClient(message, conn);
+        }
+    }
+
+    private void EndGame(string roomName, TicTacToe.Player winner, string player1Name, string player2Name)
+    {
+        string winnerName = winner == TicTacToe.Player.X ? player1Name : player2Name;
+        string winnerMessage = winner == TicTacToe.Player.None ? "It's a draw!" : $"{winnerName} ({winner}) wins!";
+
+        foreach (var conn in gameRooms[roomName])
+        {
+            SendMessageToClient("GameOver:" + winnerMessage, conn);
+        }
+
+        gameRooms.Remove(roomName);
+        gameRoomsState.Remove(roomName);
     }
 
     public void SendMessageToClient(string msg, NetworkConnection networkConnection)
