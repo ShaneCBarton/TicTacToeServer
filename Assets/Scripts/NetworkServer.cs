@@ -282,32 +282,58 @@ public class NetworkServer : MonoBehaviour
     {
         if (gameRooms.ContainsKey(roomName))
         {
-            gameRooms[roomName].Add(connection);
-            SendMessageToClient("JoinedRoom:" + roomName, connection);
-            Debug.Log($"Player {connectedUsers[connection]} joined room: {roomName}");
+            var room = gameRooms[roomName];
 
-            if (gameRooms[roomName].Count == 2)
+            if (room.Count < 2)
             {
-                gameRoomsState[roomName] = new TicTacToe();
+                room.Add(connection);
+                SendMessageToClient("JoinedRoom:" + roomName, connection);
 
-                var connections = gameRooms[roomName];
-                string player1Name = connectedUsers[connections[0]];
-                string player2Name = connectedUsers[connections[1]];
+                if (room.Count == 2)
+                {
+                    StartGame(roomName);
+                }
+            }
+            else
+            {
+                room.Add(connection);
+                SendMessageToClient("SpectatorAssigned:" + roomName, connection);
 
-                connectedUsers[connections[0]] = "Player1";
-                connectedUsers[connections[1]] = "Player2";
-
-                SendMessageToClient($"GameStarted:{roomName}:true", connections[0]);
-                SendMessageToClient($"GameStarted:{roomName}:false", connections[1]);
-
-                UpdateClientsWithBoardState(roomName, gameRoomsState[roomName], player1Name, player2Name);
+                if (gameRoomsState.ContainsKey(roomName))
+                {
+                    var game = gameRoomsState[roomName];
+                    string player1Name = connectedUsers[room[0]];
+                    string player2Name = connectedUsers[room[1]];
+                    UpdateClientsWithBoardState(roomName, game, player1Name, player2Name);
+                }
             }
         }
         else
         {
             SendMessageToClient("RoomDoesNotExist:" + roomName, connection);
-            Debug.Log($"Join room failed: Room {roomName} does not exist.");
         }
+    }
+
+    private void StartGame(string roomName)
+    {
+        var connections = gameRooms[roomName];
+        gameRoomsState[roomName] = new TicTacToe();
+
+        string player1Name = connectedUsers[connections[0]];
+        string player2Name = connectedUsers[connections[1]];
+
+        connectedUsers[connections[0]] = "Player1";
+        connectedUsers[connections[1]] = "Player2";
+
+        SendMessageToClient($"GameStarted:{roomName}:true", connections[0]);
+        SendMessageToClient($"GameStarted:{roomName}:false", connections[1]);
+
+        for (int i = 2; i < connections.Count; i++)
+        {
+            SendMessageToClient($"GameStarted:{roomName}:false", connections[i]);
+        }
+
+        UpdateClientsWithBoardState(roomName, gameRoomsState[roomName], player1Name, player2Name);
     }
 
 
